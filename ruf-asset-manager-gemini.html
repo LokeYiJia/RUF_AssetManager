@@ -642,7 +642,7 @@ async function fulfilOrderTx(orderId, extra={}) {
         timestamp: firebase.firestore.Timestamp.now()
       });
     }
-  } catch(e) { console.warn('sale log failed', e); }
+  } catch(e) { console.warn('sale log failed', e); toast('Order fulfilled, but the change-log entry failed to save: ' + (e.message||e.code||'unknown error')); }
 }
 
 async function cancelOrder(orderId, reason) {
