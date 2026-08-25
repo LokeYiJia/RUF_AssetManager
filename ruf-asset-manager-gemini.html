@@ -255,7 +255,7 @@ body{font-family:'Montserrat',sans-serif;background:#fff;color:#000;min-height:1
 .order-line{display:flex;justify-content:space-between;padding:3px 0}
 .order-total{display:flex;justify-content:space-between;font-weight:800;border-top:1.5px solid var(--border);margin-top:6px;padding-top:6px}
 .order-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
-.pay-qr-wrap{display:flex;flex-direction:column;align-items:center;padding:20px;border:2px dashed var(--border);border-radius:14px;margin:18px 0}
+.pay-qr-wrap{display:flex;flex-direction:column;align-items:center;padding:0;margin:18px 0}
 .pulse-dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--amber);margin-right:8px;animation:pulse 1.2s ease infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 
@@ -2743,7 +2743,7 @@ function pagePay() {
   const qrEl = el('img',{
     src:'src/RUFPLTQR.jpeg',
     alt:'RUF Support Us payment QR code',
-    style:{width:'50%',maxWidth:'420px',height:'auto',objectFit:'contain',display:'block'}
+    style:{width:'90%',maxWidth:'520px',height:'auto',objectFit:'contain',display:'block'}
   });
   qrWrap.appendChild(qrEl);
   qrWrap.appendChild(el('p',{style:{fontSize:'13px',color:'var(--gray)',marginTop:'12px',textAlign:'center'}},'Scan to pay with your banking app'));
