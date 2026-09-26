@@ -1525,7 +1525,7 @@ function pageDetail() {
     if (item.isConsumable && item.isMerch===true) {
       // Merch is bought through the store, not taken
       actionRow.appendChild(div({class:'alert al-navy',style:{marginBottom:'0'}},'🛍️ This is a merch item — it\'s sold through the Merch Store.'));
-      actionRow.appendChild(el('button',{class:'btn-lift btn-primary',style:{width:'100%'},onclick:()=>{S.shopMode='online';S.kiosk=false;S.cart={};go('shop');}},'Buy in Merch Store'));
+      actionRow.appendChild(el('button',{class:'btn-lift btn-primary',style:{width:'100%'},onclick:()=>go('shop-mode')},'Buy in Merch Store'));
     } else if (item.isConsumable) {
       // Take This Item
       const tb=el('button',{class:'btn-lift btn-lift-outline',style:{width:'100%'},onclick:()=>{
@@ -2513,6 +2513,39 @@ function shopHdr(title, backFn) {
   return h;
 }
 
+// Store chooser: pay in person at the booth, or pay online via QR + receipt upload
+function openShop(payMethod) {
+  S.payMethod = payMethod; S.shopMode = 'online'; S.kiosk = false; S.cart = {};
+  go('shop');
+}
+
+function pageShopMode() {
+  const pg = div({});
+  pg.appendChild(shopHdr('Merch Store', ()=>goWelcome()));
+  const wrap = div({class:'welcome-wrap'});
+  wrap.appendChild(el('h1',{class:'welcome-title'},'Merch Store'));
+  wrap.appendChild(el('p',{class:'welcome-sub'},'How would you like to pay?'));
+  const cards = div({class:'welcome-cards'});
+  const mk = (label, sub, onclick) => {
+    const c = div({class:'welcome-card', style:{flexDirection:'column',gap:'6px'}, onclick});
+    c.appendChild(el('div',{class:'wc-label'},label));
+    c.appendChild(el('div',{style:{fontSize:'13px',color:'var(--gray)'}},sub));
+    return c;
+  };
+  cards.appendChild(mk('Pay at Booth (Offline)', 'Pay, then show your payment screen to our staff.', ()=>openShop('in-person')));
+  cards.appendChild(mk('Pay Online (TnG QR)', 'Pay by QR and upload your payment screenshot.', ()=>openShop('receipt')));
+  wrap.appendChild(cards);
+  pg.appendChild(wrap);
+  return pg;
+}
+
+// Compress a receipt screenshot to fit comfortably in a Firestore doc (1 MiB limit)
+async function compressReceipt(file) {
+  let b64 = await resizeImg(file, 900);
+  if (b64.length > 700000) b64 = await resizeImg(file, 600);
+  return b64;
+}
+
 function pageShop() {
   const pg = div({});
   pg.appendChild(shopHdr(S.shopMode==='booth' ? 'Merch Booth' : 'Merch Store', S.kiosk?null:()=>goWelcome()));
@@ -2768,9 +2801,8 @@ function pagePay() {
     const cancelB = el('button',{style:{background:'none',border:'none',color:'var(--gray)',fontSize:'13px',textDecoration:'underline',cursor:'pointer',fontFamily:'inherit',display:'block',margin:'14px auto 0'},
       onclick:async()=>{ if(confirm('Cancel this order?')){ try{ await cancelOrder(S.placedOrderId,'Cancelled by customer at booth'); }catch(e){} resetShop(); } }},'Cancel this order');
     body.appendChild(cancelB);
-  } else {
-    // Online: submit, then show your payment confirmation screen to our staff in person
-    /*
+  } else if (S.payMethod==='receipt') {
+    // Online, pay by QR: receipt upload required before the order can be submitted
     body.appendChild(el('div',{class:'section-title'},'Upload payment receipt'));
     if (S.receiptThumb) {
       body.appendChild(el('img',{class:'photo-preview',src:'data:image/jpeg;base64,'+S.receiptThumb}));
@@ -2782,8 +2814,13 @@ function pagePay() {
       body.appendChild(ph);
     }
     const fi = document.getElementById('file-input');
-    fi.onchange = async e => { const f=e.target.files[0]; if(!f) return; fi.value=''; S.receiptThumb=await resizeImg(f,1000); render(); };
-    */
+    fi.onchange = async e => { const f=e.target.files[0]; if(!f) return; fi.value=''; S.receiptThumb=await compressReceipt(f); render(); };
+
+    if (S.loading) body.appendChild(div({class:'loading-pg'},div({class:'spinner'}),el('p',{},'Submitting order...')));
+    else if (!S.receiptThumb) body.appendChild(el('button',{class:'btn-lift btn-lift-outline',style:{width:'100%'},disabled:true},'Upload receipt to continue'));
+    else body.appendChild(el('button',{class:'btn-lift btn-primary',style:{width:'100%'},onclick:()=>doPlaceOnline()},'Submit Order'));
+  } else {
+    // Online, pay in person: submit, then show your payment confirmation screen to our staff
     body.appendChild(div({class:'alert al-navy',style:{textAlign:'center'}},'After paying, submit your order, then show your payment confirmation screen to our staff.'));
 
     if (S.loading) body.appendChild(div({class:'loading-pg'},div({class:'spinner'}),el('p',{},'Submitting order...')));
@@ -2795,15 +2832,23 @@ function pagePay() {
 
 async function doPlaceOnline() {
   if (!validCheckout()) return;
+  if (S.payMethod==='receipt' && !S.receiptThumb) { toast('Please upload your payment receipt.'); return; }
   S.loading = true; render();
   try {
-    const order = await placeOrder('online');
-    /*
-    try {
-      const url = await uploadOrderPhoto(S.receiptThumb, `receipts/${order.orderId}.jpg`);
-      await S.db.collection('orders').doc(order.orderId).set({ receiptUrl:url }, { merge:true });
-    } catch(e) { console.warn('receipt upload failed', e); }
-    */
+    const order = await placeOrder('online', { payMethod: S.payMethod, hasReceipt: S.payMethod==='receipt' });
+    if (S.payMethod==='receipt') {
+      try {
+        await S.db.collection('receiptImages').doc(order.orderId).set({
+          orderId: order.orderId, b64: S.receiptThumb, uploadedAt: firebase.firestore.Timestamp.now()
+        });
+      } catch(e) {
+        console.error('receipt save failed', e);
+        try { await cancelOrder(order.orderId, 'Receipt upload failed'); } catch(e2) {}
+        toast("Couldn't upload receipt — please try again.");
+        S.loading = false; render();
+        return;
+      }
+    }
     S.placedOrderId = order.orderId;
     S.cart = {}; S.receiptThumb = null;
     S.page = 'order-ok';
@@ -2834,6 +2879,13 @@ function pageOrderOk() {
     const cancelled = div({class:'alert al-red',style:{textAlign:'center',maxWidth:'420px',marginLeft:'auto',marginRight:'auto',marginBottom:'28px'}});
     cancelled.appendChild(document.createTextNode('This order was cancelled.'+(order.cancelReason?' ('+order.cancelReason+')':'')));
     w.appendChild(cancelled);
+  } else if (order && order.payMethod==='receipt') {
+    w.appendChild(el('p',{style:{color:'var(--gray)',marginBottom:'14px',maxWidth:'420px',marginLeft:'auto',marginRight:'auto',lineHeight:'1.6'}},
+      "We've received your receipt. Your items are reserved while our team verifies your payment."));
+    const wait = div({class:'alert al-green',style:{textAlign:'center',maxWidth:'420px',marginLeft:'auto',marginRight:'auto',marginBottom:'28px'}});
+    wait.appendChild(el('span',{class:'pulse-dot'}));
+    wait.appendChild(document.createTextNode('Waiting for payment verification...'));
+    w.appendChild(wait);
   } else {
     w.appendChild(el('p',{style:{color:'var(--gray)',marginBottom:'14px',maxWidth:'420px',marginLeft:'auto',marginRight:'auto',lineHeight:'1.6'}},
       'Please show this screen and your payment confirmation to our staff at the booth. Your items are reserved.'));
@@ -2942,6 +2994,7 @@ function pageOrders() {
     const top = div({class:'order-top'});
     top.appendChild(el('span',{class:'order-id'},o.orderId));
     top.appendChild(el('span',{class:'badge '+(o.type==='booth'?'b-booth':'b-online')},o.type==='booth'?'Booth':'Online'));
+    if (o.type==='online' && o.payMethod) top.appendChild(el('span',{class:'badge b-online'},o.payMethod==='receipt'?'Receipt':'In-person'));
     top.appendChild(orderStatusBadge(o));
     card.appendChild(top);
     card.appendChild(div({class:'order-meta'},fmtDateTime(o.createdAt)));
@@ -2974,6 +3027,26 @@ function pageOrders() {
     if (o.receiptUrl) thumbs.appendChild(mkThumb(o.receiptUrl,'Receipt'));
     if (o.fulfilPhotoUrl) thumbs.appendChild(mkThumb(o.fulfilPhotoUrl,'Fulfilment'));
     if (thumbs.childNodes.length) card.appendChild(thumbs);
+    if (o.hasReceipt) {
+      const rw = div({style:{marginTop:'10px'}});
+      rw.appendChild(el('button',{class:'btn btn-outline btn-sm',onclick:async(e)=>{
+        const cached = S.receiptCache && S.receiptCache[o.orderId];
+        if (cached) { S.enlargedOrderPhoto = 'data:image/jpeg;base64,'+cached; render(); return; }
+        e.target.disabled = true; e.target.textContent = 'Loading...';
+        try {
+          const doc = await S.db.collection('receiptImages').doc(o.orderId).get();
+          if (doc.exists) {
+            S.receiptCache = S.receiptCache || {};
+            S.receiptCache[o.orderId] = doc.data().b64;
+            S.enlargedOrderPhoto = 'data:image/jpeg;base64,'+doc.data().b64;
+          } else { toast('Receipt not found.'); }
+        } catch(e2) { console.error(e2); toast('Error loading receipt.'); }
+        render();
+      }},'🧾 View Receipt'));
+      card.appendChild(rw);
+    } else if (o.payMethod==='receipt' && ACTIVE_ORDER_STATUSES.includes(o.status)) {
+      card.appendChild(div({class:'alert al-amber',style:{marginTop:'10px',marginBottom:'0'}},'⚠ No receipt attached — verify payment before confirming.'));
+    }
     if (o.status==='awaiting-payment' && o.paidClaimedAt)
       card.appendChild(div({class:'alert al-green',style:{marginTop:'10px',marginBottom:'0'}},`🙋 Customer says they've paid (${fmtDateTime(o.paidClaimedAt)}) — check your TnG/bank app, then confirm.`));
 
@@ -3035,7 +3108,10 @@ function pageOrders() {
       } else if (S.confirmOnlinePayId===o.orderId) {
         const pbox = div({class:'alert al-green',style:{width:'100%',marginBottom:'0'}});
         pbox.appendChild(el('p',{style:{fontWeight:'bold',marginBottom:'6px'}},`Confirm ${fmtRM(o.total)} received from ${o.customer?.name||'customer'}?`));
-        pbox.appendChild(el('p',{style:{fontSize:'13px',marginBottom:'10px'}},'Check the customer\'s payment screen that the money actually arrived first. Stock will be deducted and the receipt emailed.'));
+        pbox.appendChild(el('p',{style:{fontSize:'13px',marginBottom:'10px'}},
+          o.payMethod==='receipt'
+            ? 'Check the RUF PLT TnG merchant app shows this amount from this customer before confirming. Stock will be deducted and the receipt emailed.'
+            : 'Check the customer\'s payment screen that the money actually arrived first. Stock will be deducted and the receipt emailed.'));
         const pr = div({style:{display:'flex',gap:'10px'}});
         pr.appendChild(el('button',{class:'btn btn-green btn-sm',onclick:()=>{S.confirmOnlinePayId=null;doConfirmPayment(o.orderId,'online');}},'✓ Yes, paid'));
         pr.appendChild(el('button',{class:'btn btn-outline btn-sm',onclick:()=>{S.confirmOnlinePayId=null;render();}},'Not yet'));
@@ -3540,7 +3616,7 @@ function pageWelcome() {
     return c;
   };
 
-  cards.appendChild(makeCard('Merch Store', ()=>{S.shopMode='online';S.kiosk=false;S.cart={};go('shop');}));
+  cards.appendChild(makeCard('Merch Store', ()=>go('shop-mode')));
   cards.appendChild(makeCard('Borrow / Return Item', ()=>{S.borrowerMode=true;S.takeMode=false;S.viewMode='bento';S.filter='All';S.statusFilter='All';S.borrowFilter='All';S.search='';S.showFilters=false;go('list');}));
   cards.appendChild(makeCard('Take an Item', ()=>{S.borrowerMode=true;S.takeMode=true;S.viewMode='bento';S.filter='All';S.statusFilter='All';S.borrowFilter='All';S.search='';S.showFilters=false;go('list');}));
   cards.appendChild(makeCard('My Borrowed Items', ()=>{S.mineInit=false;go('mine');}));
@@ -3616,7 +3692,7 @@ function render() {
     'return':pageReturn,'return-ok':pageReturnOk,'edit':pageEdit,
     'take':pageTake,'take-ok':pageTakeOk,
     'pin':pagePin,'pin-change':pagePinChange,'settings':pageSettings,'qr':pageQR,
-    'shop':pageShop,'cart':pageCart,'pay':pagePay,'order-ok':pageOrderOk,
+    'shop-mode':pageShopMode,'shop':pageShop,'cart':pageCart,'pay':pagePay,'order-ok':pageOrderOk,
     'orders':pageOrders,'fulfil':pageFulfil,'box-manage':pageBoxManage,
     'mine':pageMine
   };
