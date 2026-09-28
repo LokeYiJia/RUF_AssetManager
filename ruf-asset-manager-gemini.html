@@ -3750,12 +3750,13 @@ async function loadAndStart() {
       S.page=S.currentItem?'detail':'home';
       if(!S.currentItem) toast('Item not found: '+qrId);
     }catch(e){S.page='home';}
-  } else if(mode==='shop'){
-    S.shopMode='online'; S.kiosk=false; S.cart={}; S.page='shop';
   } else if(mode==='booth'){
     S.shopMode='booth'; S.kiosk=true; S.cart={}; S.page='shop';
+  } else if(mode==='welcome' || S.loadError){
+    S.page='welcome'; // load errors are only surfaced on the Welcome screen
   } else {
-    S.page='welcome';
+    // Default landing page: the online merch store (pay by QR + receipt upload)
+    S.payMethod='receipt'; S.shopMode='online'; S.kiosk=false; S.cart={}; S.page='shop';
   }
   render();
 
